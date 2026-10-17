@@ -8,6 +8,12 @@
 const SHIFT_TABLE_HEADER_ROWS = 1;
 const SHIFT_TABLE_DATE_COLUMN = 0;  // A: 日付
 
+// シフト変更の再送で使うセル（行・列は1始まり）。シフトの割り当てとしては読まない
+const SHIFT_RESEND_CELL = {
+  CHECKBOX: { row: 67, column: 4 },  // D67: チェックを入れると再送する
+  RESULT: { row: 67, column: 5 },    // E67: 再送の結果
+};
+
 /**
  * シフト割り当て（表の1セル）
  */
@@ -52,10 +58,12 @@ class ShiftTableRepository {
       const assignments = [];
 
       values.slice(SHIFT_TABLE_HEADER_ROWS).forEach((row, i) => {
+        const rowNumber = i + SHIFT_TABLE_HEADER_ROWS + 1;
         for (let col = SHIFT_TABLE_DATE_COLUMN + 1; col < row.length; col++) {
           if (row[col] === "" || row[col] === null) continue;
+          if (isShiftResendCell_(rowNumber, col + 1)) continue;
           const assignment = new ShiftAssignment();
-          assignment.rowNumber = i + SHIFT_TABLE_HEADER_ROWS + 1;
+          assignment.rowNumber = rowNumber;
           assignment.columnNumber = col + 1;
           assignment.date = row[SHIFT_TABLE_DATE_COLUMN];
           assignment.storeName = storeNames[col];
@@ -107,4 +115,9 @@ class ShiftTableRepository {
     }
     return this._values;
   }
+}
+
+/** シフト変更の再送で使うセル（チェックボックス・結果）か */
+function isShiftResendCell_(rowNumber, columnNumber) {
+  return Object.values(SHIFT_RESEND_CELL).some(cell => cell.row === rowNumber && cell.column === columnNumber);
 }

@@ -110,6 +110,34 @@ class ScheduleRepository {
     forgetSheetValues(this.spreadsheetId, SHEETS.SCHEDULE);
   }
 
+  /**
+   * シフトの変更を反映（A〜G列をテキスト書式で書き直し、前日確認（H列）も更新。I列以降は変えない）
+   */
+  updateShift(schedule) {
+    const sheet = this._sheet();
+    const row = schedule.toNewRow();
+    const range = sheet.getRange(schedule.rowNumber, 1, 1, row.length);
+    range.setNumberFormat("@");
+    range.setValues([row]);
+    sheet.getRange(schedule.rowNumber, SCHEDULE_COLUMN.PREV_CHECK + 1).setValue(schedule.prevCheck);
+    this._all = null;
+    forgetSheetValues(this.spreadsheetId, SHEETS.SCHEDULE);
+  }
+
+  /**
+   * 行を削除（行番号がずれないよう、下の行から消す）
+   * @param {Schedule[]} schedules
+   */
+  deleteRows(schedules) {
+    if (schedules.length === 0) return;
+    const sheet = this._sheet();
+    [...new Set(schedules.map(x => x.rowNumber))]
+      .sort((a, b) => b - a)
+      .forEach(rowNumber => sheet.deleteRow(rowNumber));
+    this._all = null;
+    forgetSheetValues(this.spreadsheetId, SHEETS.SCHEDULE);
+  }
+
   /** 前日確認（H列）を更新 */
   updatePrevCheck(schedule) {
     this._updateCell(schedule.rowNumber, SCHEDULE_COLUMN.PREV_CHECK, schedule.prevCheck);

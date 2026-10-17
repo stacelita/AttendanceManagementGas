@@ -134,6 +134,18 @@ function findDepartmentByBotUserId(botUserId) {
 }
 
 /**
+ * スプレッドシートIDから部署コードを取得
+ * @return {string|null} 一致する部署がなければ null
+ */
+function findDepartmentBySpreadsheetId(spreadsheetId) {
+  if (!spreadsheetId) return null;
+  const props = getScriptProperties_();
+  return getDepartmentCodes().find(code =>
+    (props[`${code}_${PROPERTY_KEY.SPREADSHEET_ID}`] || "").trim() === spreadsheetId
+  ) ?? null;
+}
+
+/**
  * Webhook の合言葉が正しいか（Worker を通ってきたリクエストか）
  * PROXY_SECRET が未設定の間は確認しない（Worker 側の準備ができてから設定する）
  */

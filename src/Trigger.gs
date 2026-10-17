@@ -7,6 +7,7 @@
  *  11:30  createTriggerPM            … 全トリガーを削除し、午後の通知と翌日 0:05 のトリガーを作る
  *  13:00  createTriggerAchieveRemind … 今日の勤務終了時刻に sendAchieveRemind を作る
  * ※11:30 に全トリガーを削除するため、11:30 より後の dayAlert も消える（既知の不具合 #5）
+ * ※シフト変更の再送用の編集時のトリガー（onShiftTableEdit）は削除しない
  */
 
 /** 午後に作るトリガー（関数・何日後・時・分） */
@@ -127,6 +128,9 @@ function deleteTrigger(handlerName) {
   });
 }
 
+/** 時刻指定のトリガーをすべて削除する（シフト変更の再送用の編集時のトリガーは残す） */
 function deleteAllTriggers_() {
-  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() !== onShiftTableEdit.name)
+    .forEach(t => ScriptApp.deleteTrigger(t));
 }

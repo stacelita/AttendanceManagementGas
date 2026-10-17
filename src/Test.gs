@@ -69,6 +69,7 @@ function test_checkFiles() {
     "LineWebhookController": typeof LineWebhookController,
     "Notifications": typeof sendAlert,
     "ScheduleTransfer": typeof updateWorkManagement,
+    "ShiftResend": typeof onShiftTableEdit,
     "Trigger": typeof setupTrigger,
     "Diagnostics": typeof measurePerformance,
   };
@@ -128,6 +129,15 @@ function test_scheduled() {
   if (isNaN(now.getTime())) throw new Error("alertNow の形式が不正です: " + settings.alertNow);
   sendAlert(settings.alertType, now);
   console.log(`alertType=${settings.alertType} now=${settings.alertNow} を実行しました。TEST_LOGシートを確認してください。`);
+}
+
+/** シフト変更の再送（シフト表(編集)の D67 にチェックを入れたときと同じ処理。基準時刻は alertNow） */
+function test_resendChangedShifts() {
+  assertTestMode_();
+  const settings = testSettings_();
+  const now = new Date(settings.alertNow);
+  if (isNaN(now.getTime())) throw new Error("alertNow の形式が不正です: " + settings.alertNow);
+  console.log(resendChangedShifts_(now));
 }
 
 // --- 内部処理 ---
