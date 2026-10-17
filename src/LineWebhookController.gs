@@ -173,6 +173,8 @@ class LineWebhookController {
           text += `${staff.name}のシフト\n${this._scheduleText(staff.name, false)}\n\n`;
         });
     }
+    // スタッフ情報（氏名）が未登録の人は、本人のシフトの代わりに登録をお願いする
+    if (!staffName) return text + UNREGISTERED_STAFF_MESSAGE;
     return text + `${staffName}のシフト\n${this._scheduleText(staffName, !isScopedAdmin)}`;
   }
 
@@ -230,8 +232,7 @@ class LineWebhookController {
     const line = getLineClient();
     repos.admins.findAll()
       .filter(admin => admin.isInCharge(tantoshaCode))
-      // 宛先が不正な管理者への送信に失敗すると、残りの管理者には送られない（既知の不具合 #6）
-      .forEach(admin => line.push(admin.userId, [message]));
+      .forEach(admin => line.pushOrLogError(admin.userId, [message], "notifyAdmins", { from: userId }));
     return "";
   }
 }

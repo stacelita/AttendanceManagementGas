@@ -82,6 +82,9 @@ const MESSAGE_PREFIX = {
 /** メンテナンス中の返信・レスポンスの文言 */
 const MAINTENANCE_MESSAGE = "メンテナンス中です。しばらくお待ちください。";
 
+/** スタッフ情報（氏名）が未登録の人が「シフトの確認」をしたときの返信 */
+const UNREGISTERED_STAFF_MESSAGE = "スタッフ情報が登録されていないため、シフトを表示できません。\nスタッフ情報の登録をお願いします。";
+
 // --- LIFF からのリクエスト（ActionController） ---
 
 /** LIFF から送られる action */

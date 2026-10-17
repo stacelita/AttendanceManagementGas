@@ -31,6 +31,23 @@ class LineClient {
     return this._send(LINE_API_URL.PUSH, { to, messages });
   }
 
+  /**
+   * 複数の宛先へ順に送る処理用の push
+   * 送信に失敗しても例外を投げず、LOG に記録して続ける（1人の失敗で残りの人に届かなくならないように）
+   * @param {string} logAction LOG の処理名
+   * @param {Object} logData LOG に一緒に残す情報
+   * @return {boolean} 送信できたか
+   */
+  pushOrLogError(to, messages, logAction, logData) {
+    try {
+      this.push(to, messages);
+      return true;
+    } catch (e) {
+      writeLog(to, logAction, "ERROR", errorLogContent(e, logData));
+      return false;
+    }
+  }
+
   /** プロフィール取得（読み取りのみのため、テストモードでも実行する） */
   getProfile(userId) {
     return this._get(LINE_API_URL.PROFILE + userId);

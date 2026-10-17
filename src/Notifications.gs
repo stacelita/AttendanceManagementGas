@@ -63,8 +63,7 @@ function alertDefinition_(alertType) {
       achieveRequest: { isReminder: false },
     },
     [ALERT_TYPE.ACHIEVE_RE]: {
-      // ※当日確認が「確認済み」の人も除いている（既知の不具合 #4。動作を変えないため残している）
-      skipIfChecked: "todayCheck", skipIfEntered: true,
+      skipIfEntered: true,
       achieveRequest: { isReminder: true },
     },
     [ALERT_TYPE.ACHIEVE_ADMIN]: {
@@ -154,8 +153,7 @@ function sendStaffAlerts_(alertType, definition, targets, targetDate) {
           staffAlertBodyFor_(alertType, definition, target, targetDate),
           definition.confirmPrefix + targetDate
         );
-    // 1人への送信に失敗すると、残りの人には送られない（既知の不具合 #6）
-    line.push(target.userId, [message]);
+    line.pushOrLogError(target.userId, [message], "sendAlert", { alertType });
   });
 }
 
@@ -170,7 +168,7 @@ function sendAdminAlerts_(alertType, definition, targets, targetDate) {
 
     const listText = myTargets.map(t => `・${t.userName}`).join("\n");
     const body = adminListBody(definition.title, targetDate, listText);
-    line.push(admin.userId, [confirmFlexMessage(definition.title, body, null)]);
+    line.pushOrLogError(admin.userId, [confirmFlexMessage(definition.title, body, null)], "sendAlert", { alertType });
   });
 }
 
