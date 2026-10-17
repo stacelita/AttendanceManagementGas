@@ -100,7 +100,7 @@ class AchievementRepository {
    */
   findAll() {
     if (!this._all) {
-      const values = readSheetValues(this.spreadsheetId, SHEETS.ARCHIVE);
+      const values = readSheetValues(this.spreadsheetId, SHEETS.ACHIEVEMENT);
       const productNames = AchievementRepository._productNames(values[ACHIEVEMENT_HEADER_ROW - 1] || []);
       this._all = values
         .slice(ACHIEVEMENT_DATA_START_ROW - 1)
@@ -116,7 +116,7 @@ class AchievementRepository {
    */
   findAllKeys() {
     if (!this._keys) {
-      this._keys = readRangeValues(this.spreadsheetId, SHEETS.ARCHIVE, achievementKeysA1()).map((row, i) => ({
+      this._keys = readRangeValues(this.spreadsheetId, SHEETS.ACHIEVEMENT, achievementKeysA1()).map((row, i) => ({
         rowNumber: i + ACHIEVEMENT_DATA_START_ROW,
         userId: row[0],
         workDate: row[ACHIEVEMENT_COLUMN.WORK_DATE - ACHIEVEMENT_COLUMN.USER_ID],
@@ -135,7 +135,7 @@ class AchievementRepository {
     this._setProductFormulas(sheet, achievement.rowNumber);
     this._all = null;
     this._keys = null;
-    forgetSheetValues(this.spreadsheetId, SHEETS.ARCHIVE);
+    forgetSheetValues(this.spreadsheetId, SHEETS.ACHIEVEMENT);
   }
 
   /**
@@ -148,7 +148,7 @@ class AchievementRepository {
     this._setProductFormulas(sheet, achievement.rowNumber);
     this._all = null;
     this._keys = null;
-    forgetSheetValues(this.spreadsheetId, SHEETS.ARCHIVE);
+    forgetSheetValues(this.spreadsheetId, SHEETS.ACHIEVEMENT);
   }
 
   /**
@@ -185,6 +185,6 @@ class AchievementRepository {
   }
 
   _sheet() {
-    return getSheet(this.spreadsheetId, SHEETS.ARCHIVE);
+    return getSheet(this.spreadsheetId, SHEETS.ACHIEVEMENT);
   }
 }

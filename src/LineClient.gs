@@ -1,15 +1,13 @@
 /**
  * LINE Messaging API クライアント
  *
- * LINEへの送信はすべてここを通す。LINE_MODE によって送信先を切り替える。
+ * LINE への送信はすべてここを通す。スクリプトプロパティ LINE_MODE によって送り方を切り替える。
  *   production : そのまま送信
- *   test       : TEST_LINE_USER_ID 宛ての push に変換して送信（replyも push に変換）
- *                送信内容は TEST_LOG シートに記録する
- *   disabled   : 送信しない（LOGシートにエラーを記録）
+ *   test       : TEST_LINE_USER_ID 宛ての push に変換して送信（reply も push に変換）。送信内容は TEST_LOG シートに記録
+ *   disabled   : 送信しない（LOG シートにエラーを記録）
  */
 class LineClient {
   /**
-   * コンストラクタ
    * @param {AppConfig} config
    */
   constructor(config) {
@@ -18,17 +16,59 @@ class LineClient {
     this.testUserId = config.testLineUserId;
   }
 
+  /** 返信（Webhook の replyToken を使う） */
+  reply(replyToken, messages) {
+    return this._send(LINE_API_URL.REPLY, { replyToken, messages });
+  }
+
+  /** テキスト1件で返信 */
+  replyText(replyToken, text) {
+    return this.reply(replyToken, [textMessage(text)]);
+  }
+
+  /** 指定のユーザーへ送信 */
+  push(to, messages) {
+    return this._send(LINE_API_URL.PUSH, { to, messages });
+  }
+
+  /** プロフィール取得（読み取りのみのため、テストモードでも実行する） */
+  getProfile(userId) {
+    return this._get(LINE_API_URL.PROFILE + userId);
+  }
+
+  /** 公式アカウント（Bot）の情報取得（userId が Webhook の destination と同じ値） */
+  getBotInfo() {
+    return this._get(LINE_API_URL.BOT_INFO);
+  }
+
   /**
-   * POST送信（reply / push など）
+   * LIFF の ID トークンを検証（読み取りのみのため、テストモードでも実行する）
+   * @param {string} idToken liff.getIDToken() の値
+   * @param {string} channelId LIFF アプリがある LINE ログインチャネルの ID
+   * @return {Object|null} 検証できればトークンの内容（sub = LINE ユーザー ID）、できなければ null
    */
-  post(url, payload) {
+  verifyIdToken(idToken, channelId) {
+    const res = UrlFetchApp.fetch(LINE_API_URL.VERIFY_ID_TOKEN, {
+      method: "post",
+      payload: { id_token: idToken, client_id: channelId },
+      muteHttpExceptions: true,
+    });
+    return res.getResponseCode() === 200 ? JSON.parse(res.getContentText()) : null;
+  }
+
+  // --- 内部処理 ---
+
+  _get(url) {
+    const res = UrlFetchApp.fetch(url, { headers: { Authorization: "Bearer " + this.token } });
+    return JSON.parse(res.getContentText());
+  }
+
+  _send(url, payload) {
     switch (this.mode) {
       case LINE_SEND_MODE.PRODUCTION:
-        return this._fetchPost(url, payload);
-
+        return this._post(url, payload);
       case LINE_SEND_MODE.TEST:
-        return this._postForTest(url, payload);
-
+        return this._sendToTestUser(url, payload);
       default:
         writeLog("SYSTEM", "LINE_SEND", "ERROR", {
           message: "LINE_MODEが未設定または不正なため送信を停止しました",
@@ -39,43 +79,7 @@ class LineClient {
     }
   }
 
-  /**
-   * プロフィール取得（読み取りのみのためテストモードでも実行する）
-   */
-  getProfile(userId) {
-    const res = UrlFetchApp.fetch(LINE_API_URL.PROFILE + userId, {
-      headers: { Authorization: "Bearer " + this.token }
-    });
-    return JSON.parse(res.getContentText());
-  }
-
-  /**
-   * 公式アカウント（Bot）の情報取得（読み取りのみ。userId が Webhook の destination と同じ値）
-   */
-  getBotInfo() {
-    const res = UrlFetchApp.fetch(LINE_API_URL.BOT_INFO, {
-      headers: { Authorization: "Bearer " + this.token }
-    });
-    return JSON.parse(res.getContentText());
-  }
-
-  /**
-   * LIFF の IDトークンを検証（読み取りのみ。テストモードでも実行する）
-   * @param {string} idToken liff.getIDToken() の値
-   * @param {string} channelId LIFFアプリがあるLINEログインチャネルのID
-   * @return {Object|null} 検証成功ならトークンの内容（sub = LINEユーザーID）、失敗なら null
-   */
-  verifyIdToken(idToken, channelId) {
-    const res = UrlFetchApp.fetch(LINE_API_URL.VERIFY_ID_TOKEN, {
-      method: "post",
-      payload: { id_token: idToken, client_id: channelId },
-      muteHttpExceptions: true,
-    });
-    if (res.getResponseCode() !== 200) return null;
-    return JSON.parse(res.getContentText());
-  }
-
-  _fetchPost(url, payload) {
+  _post(url, payload) {
     return UrlFetchApp.fetch(url, {
       headers: {
         "Content-Type": "application/json; charset=UTF-8",
@@ -86,19 +90,15 @@ class LineClient {
     });
   }
 
-  /**
-   * テストモード送信：本来の内容を記録し、テスト用ユーザー宛てのpushに変換して送る
-   */
-  _postForTest(url, payload) {
+  /** テストモード：本来の送信内容を記録し、先頭に本来の送り先を書いて、テスト用ユーザーへ push する */
+  _sendToTestUser(url, payload) {
     writeTestLog(url, payload);
     if (!this.testUserId) return null;
 
-    const notice = LineClient._describeOriginalTarget(url, payload);
-    const messages = [{ type: LINE_MESSAGE_TYPE.TEXT, text: notice }]
+    const messages = [textMessage(LineClient._describeOriginalTarget(url, payload))]
       .concat(payload.messages || [])
       .slice(0, 5); // 1回の送信で送れるメッセージは最大5件
-
-    return this._fetchPost(LINE_API_URL.PUSH, { to: this.testUserId, messages: messages });
+    return this._post(LINE_API_URL.PUSH, { to: this.testUserId, messages: messages });
   }
 
   static _describeOriginalTarget(url, payload) {
@@ -108,16 +108,17 @@ class LineClient {
   }
 }
 
-/**
- * LINEクライアントを取得
- */
+/** 処理中の部署の公式アカウントで送る LineClient */
 function getLineClient() {
   return new LineClient(getAppConfig());
 }
 
-/**
- * テストモードの送信内容を TEST_LOG シートに記録（シートがなければ作成）
- */
+/** テキストメッセージ */
+function textMessage(text) {
+  return { type: LINE_MESSAGE_TYPE.TEXT, text: text };
+}
+
+/** テストモードの送信内容を TEST_LOG シートに記録（シートがなければ作成） */
 function writeTestLog(url, payload) {
   try {
     const spreadsheet = getSpreadsheet();

@@ -10,7 +10,7 @@ const STORE_COLUMN = {
   CHECK_IN_TIME: 1, // B: 入り時間
   START_TIME: 2,    // C: 開始時間
   END_TIME: 3,      // D: 終了時間
-  ALERT_FLG: 4,     // E: アラートフラグ（ON/OFF）
+  STORE_ALERT_FLAG: 4,     // E: アラートフラグ（ON/OFF）
   DETAIL: 5,        // F: 詳細
 };
 const STORE_HEADER_ROWS = 1;
@@ -31,7 +31,7 @@ class Store {
 
   /** アラートOFFの店舗か */
   get isAlertOff() {
-    return this.alertFlg === ALERT_FLG.OFF;
+    return this.alertFlg === STORE_ALERT_FLAG.OFF;
   }
 
   static fromRow(row, rowNumber) {
@@ -41,7 +41,7 @@ class Store {
     store.checkInTime = row[STORE_COLUMN.CHECK_IN_TIME];
     store.startTime = row[STORE_COLUMN.START_TIME];
     store.endTime = row[STORE_COLUMN.END_TIME];
-    store.alertFlg = row[STORE_COLUMN.ALERT_FLG];
+    store.alertFlg = row[STORE_COLUMN.STORE_ALERT_FLAG];
     store.detail = row[STORE_COLUMN.DETAIL];
     return store;
   }

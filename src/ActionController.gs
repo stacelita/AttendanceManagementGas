@@ -1,62 +1,49 @@
 /**
- * LIFFからのactionを操作
+ * LIFF からのリクエスト（action ごとの処理）
+ *
+ * ※レスポンスの形・文言は LIFF の画面（Cloudflare）と合わせているため変えないこと
  */
 class ActionController {
-  /**
-   * コンストラクタ
-   */
   constructor(params) {
     this.params = params;
   }
 
-  /**
-   * 必須パラメータ検証
-   */
-  _validateRequired(requiredKeys) {
-    const missing = getMissingParams(this.params, requiredKeys);
-    if (missing.length === 0) return null;
-    return jsonResponse({
-      status: "error",
-      message: "missing parameters",
-      missing: missing,
-    });
+  handle() {
+    // 例外を LOG に記録するときのユーザー・処理名（本人確認で userId が書き換わる前の値）
+    const logUserId = this.params.userId || "UNKNOWN_USER";
+    const logAction = this.params.action || "UNKNOWN_ACTION";
+
+    try {
+      const authError = this._authenticate();
+      if (authError) return authError;
+
+      // 複数のシートを読む action は、1回でまとめて読んでおく（BATCH_READ=true のときだけ）
+      prefetchSheetValues(getAppConfig().spreadsheetId, this._sheetsToRead());
+
+      const handler = this._handlers()[this.params.action];
+      return handler ? handler() : jsonResponse({ error: "unknown action" });
+    } catch (e) {
+      // 例外のときはレスポンスを返さない（従来どおり）
+      writeLog(logUserId, logAction, "ERROR", errorLogContent(e, undefined));
+    }
   }
 
-  /**
-   * 本人確認：LIFF の ID トークンを LINE で検証し、検証できた userId を使う
-   * （個人のデータを扱う action のみ。送られてきた userId はそのまま信用しない）
-   *
-   * ・ID トークンあり：検証に失敗、または送られてきた userId と一致しなければエラー
-   * ・ID トークンなし：REQUIRE_ID_TOKEN=true ならエラー。そうでなければ従来どおり（移行期間用）
-   * @return {TextOutput|null} エラー時のレスポンス。問題なければ null
-   */
-  _authenticate() {
-    if (!ACTIONS_WITH_USER.includes(this.params.action)) return null;
-
-    const config = getAppConfig();
-    const idToken = this.params.idToken;
-    if (!idToken) {
-      return config.requireIdToken ? this._authErrorResponse() : null;
-    }
-
-    const verified = config.liffChannelId
-      ? getLineClient().verifyIdToken(idToken, config.liffChannelId)
-      : null;
-    if (!verified || !verified.sub || (this.params.userId && verified.sub !== this.params.userId)) {
-      return this._authErrorResponse();
-    }
-
-    this.params.userId = verified.sub;
-    return null;
+  _handlers() {
+    return {
+      [ACTIONS.GET_ASSIGNED_STORE]: () => this.getAssignedStore(),
+      [ACTIONS.RECORD_ACHIEVE]: () => this.recordAchieve(),
+      [ACTIONS.GET_CATEGORY]: () => this.getCategory(),
+      [ACTIONS.RECORD_PROFILE]: () => this.recordProfile(),
+      [ACTIONS.GET_PROFILE]: () => this.getProfile(),
+      [ACTIONS.IS_MAINTENANCE]: () => this.getMaintenanceStatus(),
+    };
   }
 
-  /**
-   * action の処理で読むシート（まとめて読むため。1枚だけの action はまとめても速くならないので対象外）
-   */
-  _sheetsNeeded() {
+  /** 処理で読むシート（まとめて読むため。1枚しか読まない action はまとめても速くならないので空） */
+  _sheetsToRead() {
     switch (this.params.action) {
-      case ACTIONS.RECORD_ARCHIVE:
-        return [SHEETS.SYSTEM_STATUS, SHEETS.SCHEDULE, SHEETS.STAFF, { sheetName: SHEETS.ARCHIVE, a1: achievementKeysA1() }];
+      case ACTIONS.RECORD_ACHIEVE:
+        return [SHEETS.SYSTEM_STATUS, SHEETS.SCHEDULE, SHEETS.STAFF, { sheetName: SHEETS.ACHIEVEMENT, a1: achievementKeysA1() }];
       case ACTIONS.RECORD_PROFILE:
         return [SHEETS.SYSTEM_STATUS, SHEETS.STAFF];
       default:
@@ -64,256 +51,174 @@ class ActionController {
     }
   }
 
-  _authErrorResponse() {
-    return jsonResponse({ status: "error", message: AUTH_ERROR_MESSAGE });
-  }
+  // --- action ごとの処理 ---
 
-  /**
-   * 分岐処理
-   */
-  handle() {
-    // `doGet` 経由で `items` を文字列(JSON)として受け取るケースがあるため、配列に戻す
-    if (this.params.action === ACTIONS.ARCHIVE && typeof this.params.items === "string") {
-      try {
-        this.params.items = JSON.parse(this.params.items);
-      } catch {
-        // パースできない場合はそのまま（recordAchieve側で型チェックしてエラー返却）
-      }
-    }
-    let userId = 'UNKNOWN_USER';
-    let action = 'UNKNOWN_ACTION';
-    if (this.params) {
-      userId = this.params.userId || 'UNKNOWN_USER';
-      action = this.params.action || 'UNKNOWN_ACTION';
-    }
-
-    try {
-      // 本人確認（個人のデータを扱う action のみ）
-      const authError = this._authenticate();
-      if (authError) return authError;
-
-      // 複数のシートを読む action は、1回でまとめて読んでおく（BATCH_READ=true のときだけ）
-      prefetchSheetValues(getAppConfig().spreadsheetId, this._sheetsNeeded());
-
-      switch (this.params.action) {
-        // 勤務場所取得
-        case ACTIONS.GET_ASSIGNED_STORE :
-          return this.getAssignedStore();
-
-        // 実績入力
-        case ACTIONS.RECORD_ARCHIVE:
-          return this.recordAchieve();
-
-        // 定数取得
-        case ACTIONS.GET_CATEGORY:
-          return this.getCategory();
-
-        // スタッフ情報入力
-        case ACTIONS.RECORD_PROFILE:
-          return this.recordProfile();
-
-        // スタッフ情報取得
-        case ACTIONS.GET_PROFILE:
-          return this.getProfile();
-
-        // メンテナンス状態取得
-        case ACTIONS.IS_MAINTENANCE:
-          return this.getMaintenanceStatus();
-          
-        default:
-          return jsonResponse({ error: "unknown action" });
-      }
-    } catch (e) {
-      const errorDetail = {
-        message: e.message,
-        stack: e.stack,
-        fileName: e.fileName,
-        lineNumber: e.lineNumber,
-        eventData: JSON.stringify(this.event)
-      };  
-      writeLog(userId, action, 'ERROR', errorDetail);
-    }
-  }
-
-  /**
-   * 勤務場所検索
-   */
+  /** 指定日の勤務場所 */
   getAssignedStore() {
-    const validationError = this._validateRequired(["userId", "targetDate"]);
-    if (validationError) return validationError;
+    const missing = this._missingParamsResponse(["userId", "targetDate"]);
+    if (missing) return missing;
 
     const userId = this.params.userId;
-    const target = toJstYmd(this.params.targetDate);
-
+    const targetDate = toJstCompactDate(this.params.targetDate);
     const schedule = getRepositories().schedules.findAll()
-      .find(x => x.userId === userId && toJstYmd(x.workDate) === target);
+      .find(x => x.userId === userId && toJstCompactDate(x.workDate) === targetDate);
 
-    const result = schedule ? schedule.storeName : "シフトなし";
-
-    // 読み取りだけの処理なので LOG には書かない（応答を速くするため。エラー時は handle() で記録する）
-    return jsonResponse({ location: result });
+    // 読み取りだけの処理なので LOG には書かない
+    return jsonResponse({ location: schedule ? schedule.storeName : "シフトなし" });
   }
 
-  /**
-   * 実績入力
-   */
+  /** 勤務実績の登録（同じ勤務日の実績があれば、isOverwrite のときだけ上書き） */
   recordAchieve() {
-    if (getRepositories().systemStatus.get().isMaintenance) {
-      return jsonResponse({ status: "error", message: "メンテナンス中です。しばらくお待ちください。" });
-    }
-    const userId = this.params.userId;
-    const validationError = this._validateRequired([
-      "userId",
-      "userName",
-      "date",
-      "categoryValue",
-      "items",
-    ]);
-    if (validationError) return validationError;
+    const repos = getRepositories();
+    if (repos.systemStatus.get().isMaintenance) return errorResponse_(MAINTENANCE_MESSAGE);
 
-    if (!Array.isArray(this.params.items)) {
-      return jsonResponse({ status: "error", message: "items must be array" });
-    }
+    const missing = this._missingParamsResponse(["userId", "userName", "date", "categoryValue", "items"]);
+    if (missing) return missing;
 
-    const schedule = getRepositories().schedules.findAll()
-      .find(x => x.userId === userId && toJstYmd(x.workDate) === toJstYmd(this.params.date));
-    if(!schedule){
-      return jsonResponse({ status: "error", message: "勤務日ではありません。" });
+    const p = this.params;
+    if (!Array.isArray(p.items)) return errorResponse_("items must be array");
+
+    const workDate = toJstCompactDate(p.date);
+    const isWorkDay = repos.schedules.findAll()
+      .some(x => x.userId === p.userId && toJstCompactDate(x.workDate) === workDate);
+    if (!isWorkDay) return errorResponse_("勤務日ではありません。");
+
+    const existing = repos.achievements.findAllKeys()
+      .find(x => String(x.userId) === String(p.userId) && toJstCompactDate(x.workDate) === workDate);
+    if (existing && !p.isOverwrite) {
+      return errorResponse_("既に情報が登録されています。更新する場合はチェックボックスを選択してください。");
     }
 
-    // 同じスタッフ・同じ勤務日の実績が登録済みか（userId と勤務日の列だけ読む）
-    const achievements = getRepositories().achievements;
-    const existing = achievements.findAllKeys().find(x =>
-      String(x.userId) === String(userId) &&
-      toJstYmd(x.workDate) === toJstYmd(this.params.date)
-    );
+    const staffName = repos.staffs.findRegisteredName(p.userId);
+    if (staffName === undefined) return errorResponse_("該当のスタッフは存在しません。");
 
-    if(existing && !this.params.isOverwrite)
-        return jsonResponse({ status: "error", message: "既に情報が登録されています。更新する場合はチェックボックスを選択してください。" });
-
-    // 氏名が登録済みのスタッフのみ対象
-    const staffName = getRepositories().staffs.findAll().find(x => x.userId === userId && x.name)?.name;
-    if(staffName === undefined)
-      return jsonResponse({ status: "error", message: "該当のスタッフは存在しません。" });
-
-    // 上書き時は既存の行、それ以外は新規
     const achievement = new Achievement();
     if (existing) achievement.rowNumber = existing.rowNumber;
     achievement.registeredAt = new Date();
-    achievement.userId = userId;
+    achievement.userId = p.userId;
     achievement.staffName = staffName;
-    achievement.workDate = this.params.date;
-    achievement.storeName = this.params.store;
-    achievement.categoryValue = this.params.categoryValue;
-    achievement.items = JSON.stringify(this.params.items);
-    achievement.uniqueProducts = this.params.uniqueProducts.trim() || "なし";
-    achievement.memo = this.params.memo.trim() || "なし";
+    achievement.workDate = p.date;
+    achievement.storeName = p.store;
+    achievement.categoryValue = p.categoryValue;
+    achievement.items = JSON.stringify(p.items);
+    achievement.uniqueProducts = p.uniqueProducts.trim() || "なし";
+    achievement.memo = p.memo.trim() || "なし";
 
-    // A〜I列を書き込み、J列以降に商品ごとの数量の数式を設定
     if (existing) {
-      achievements.update(achievement);
+      repos.achievements.update(achievement);
     } else {
-      achievements.add(achievement);
+      repos.achievements.add(achievement);
     }
 
-    // 勤務管理の実績入力状況を更新（勤務日のセル値と yyyy/MM/dd 文字列をそのまま比較）
-    const schedules = getRepositories().schedules;
-    const workSchedule = schedules.findAll()
-      .find(x => x.userId === userId && x.workDate === toJstYmdSlash(this.params.date));
-
-    if (workSchedule) {
-      workSchedule.achieveStatus = SCHEDULE_ACHIEVE_STATUS.DONE;
-      schedules.updateAchieveStatus(workSchedule);
+    // 勤務管理の実績入力状況を「入力済み」にする（勤務日のセルと yyyy/MM/dd の文字列をそのまま比べる）
+    const schedule = repos.schedules.findAll()
+      .find(x => x.userId === p.userId && x.workDate === toJstSlashDate(p.date));
+    if (schedule) {
+      schedule.achieveStatus = SCHEDULE_ACHIEVE_STATUS.DONE;
+      repos.schedules.updateAchieveStatus(schedule);
     }
-    // ログ出力
-    writeLog(userId, this.params.action, 'SUCCESS', {savedData: achievement.toRow()});
+
+    writeLog(p.userId, p.action, "SUCCESS", { savedData: achievement.toRow() });
     return jsonResponse({ status: "success" });
   }
 
-  /**
-   * スタッフ情報入力
-   */
+  /** スタッフ情報の登録（まだ氏名が登録されていない場合だけ） */
   recordProfile() {
-    if (getRepositories().systemStatus.get().isMaintenance) {
-      return jsonResponse({ status: "error", message: "メンテナンス中です。しばらくお待ちください。" });
-    }
+    const repos = getRepositories();
+    if (repos.systemStatus.get().isMaintenance) return errorResponse_(MAINTENANCE_MESSAGE);
 
-    const validationError = this._validateRequired([
-      "userId",
-      "userName",
-      "userKana",
-      "birthDate",
-      "station",
-      "tel",
-    ]);
-    if (validationError) return validationError;
+    const missing = this._missingParamsResponse(["userId", "userName", "userKana", "birthDate", "station", "tel"]);
+    if (missing) return missing;
 
-    const targetId = this.params.userId;
+    const p = this.params;
+    const staff = repos.staffs.findAll().find(x => String(x.userId) === String(p.userId));
+    if (!staff) return errorResponse_("User ID not found");
+    if (staff.name !== "") return errorResponse_("既に情報が登録されています。");
 
-    // 一致する行を検索（文字列として比較）
-    const staff = getRepositories().staffs.findAll().find(x => String(x.userId) === String(targetId));
-    if (!staff) {
-      return jsonResponse({ status: "error", message: "User ID not found" });
-    }
+    staff.name = p.userName;
+    staff.nameKana = p.userKana;
+    staff.birthday = p.birthDate;
+    staff.station = p.station;
+    staff.tel = p.tel;
+    staff.status = STAFF_STATUS.ACTIVE;
+    repos.staffs.updateProfile(staff);
 
-    if (staff.name !== "")
-      return jsonResponse({ status: "error", message: "既に情報が登録されています。" });
-
-    staff.name = this.params.userName;
-    staff.nameKana = this.params.userKana;
-    staff.birthday = this.params.birthDate;
-    staff.station = this.params.station;
-    staff.tel = this.params.tel;
-    staff.status = STAFF_STATUS.ACTIVE; // 初期値として「有効」
-    getRepositories().staffs.updateProfile(staff);
-
-    // ログ出力
     const savedData = [[staff.name, staff.nameKana, staff.birthday, staff.station, staff.tel]];
-    writeLog(targetId, this.params.action, 'SUCCESS', {savedData: savedData});
+    writeLog(p.userId, p.action, "SUCCESS", { savedData: savedData });
     return jsonResponse({ status: "success", message: "Updated successfully" });
   }
 
-  // スタッフ情報取得
+  /** 登録済みのスタッフ情報（氏名が未登録なら profile: null） */
   getProfile() {
-    const targetUserId = this.params.userId;
-
-    // 条件に一致する最初のスタッフを取得（従来どおり == で比較）
-    const staff = getRepositories().staffs.findAll().find(x => x.userId == targetUserId);
-
+    // 従来どおり == で比べる
+    const staff = getRepositories().staffs.findAll().find(x => x.userId == this.params.userId);
     const isRegistered = staff && staff.name !== "" && staff.name !== undefined && staff.name !== null;
-
-    // 氏名が登録済みの場合のみオブジェクトを作成
-    const profileData = isRegistered ? {
-      name: staff.name,
-      furigana: staff.nameKana,
-      birthday: staff.birthday,
-      station: staff.station,
-      phone: staff.tel
-    } : null;
 
     return jsonResponse({
       status: "success",
-      profile: profileData
+      profile: isRegistered ? {
+        name: staff.name,
+        furigana: staff.nameKana,
+        birthday: staff.birthday,
+        station: staff.station,
+        phone: staff.tel,
+      } : null,
     });
   }
 
-  /**
-   * 区分値取得
-   */
+  /** 定数シートの区分値の一覧 */
   getCategory() {
-    const validationError = this._validateRequired(["kubunType"]);
-    if (validationError) return validationError;
+    const missing = this._missingParamsResponse(["kubunType"]);
+    if (missing) return missing;
 
-    const data = getRepositories().consts.findAll()
+    const items = getRepositories().consts.findAll()
       .filter(x => String(x.categoryId) === this.params.kubunType)
-      .map(x => ({
-        value: String(x.itemValue),
-        name: String(x.itemName)
-      }));
-    return jsonResponse(data);
+      .map(x => ({ value: String(x.itemValue), name: String(x.itemName) }));
+    return jsonResponse(items);
   }
 
-  getMaintenanceStatus(){
+  getMaintenanceStatus() {
     return jsonResponse({ status: "success", is_maintenance: getRepositories().systemStatus.get().isMaintenance });
   }
+
+  // --- 本人確認・入力チェック ---
+
+  /**
+   * 本人確認：LIFF の ID トークンを LINE で検証し、検証できた userId を使う
+   * （個人のデータを扱う action のみ。送られてきた userId はそのまま信用しない）
+   *   ・ID トークンあり：検証できない、または送られてきた userId と違えばエラー
+   *   ・ID トークンなし：REQUIRE_ID_TOKEN=true ならエラー。そうでなければ従来どおり（移行期間用）
+   * @return {TextOutput|null} エラーのレスポンス。問題なければ null
+   */
+  _authenticate() {
+    if (!ACTIONS_WITH_USER.includes(this.params.action)) return null;
+
+    const config = getAppConfig();
+    const idToken = this.params.idToken;
+    if (!idToken) {
+      return config.requireIdToken ? errorResponse_(AUTH_ERROR_MESSAGE) : null;
+    }
+
+    const verified = config.liffChannelId ? getLineClient().verifyIdToken(idToken, config.liffChannelId) : null;
+    if (!verified || !verified.sub || (this.params.userId && verified.sub !== this.params.userId)) {
+      return errorResponse_(AUTH_ERROR_MESSAGE);
+    }
+    this.params.userId = verified.sub;
+    return null;
+  }
+
+  /** 必須パラメータが足りなければエラーのレスポンス、足りていれば null */
+  _missingParamsResponse(requiredKeys) {
+    const missing = requiredKeys.filter(key => {
+      const value = this.params[key];
+      return value === undefined || value === null || value === "";
+    });
+    if (missing.length === 0) return null;
+    return jsonResponse({ status: "error", message: "missing parameters", missing: missing });
+  }
+}
+
+/** エラーのレスポンス */
+function errorResponse_(message) {
+  return jsonResponse({ status: "error", message: message });
 }

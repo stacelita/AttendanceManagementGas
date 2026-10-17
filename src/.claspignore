@@ -1,0 +1,10 @@
+# clasp push で GAS に送るファイル：appsscript.json とトップの .gs だけ
+**/**
+!appsscript.json
+!*.gs
+
+# テスト専用（本番プロジェクトには送らない）
+Test.gs
+
+.git/**
+node_modules/**

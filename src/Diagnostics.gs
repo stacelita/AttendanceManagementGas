@@ -114,8 +114,8 @@ function verifyBatchReadFor_(departmentCode) {
   const usedSheets = [SHEETS.SYSTEM_STATUS, SHEETS.STAFF, SHEETS.ADMIN, SHEETS.STORE, SHEETS.CONST,
     SHEETS.SCHEDULE, SHEETS.SHIFT_TABLE, SHEETS.HOLIDAY];
   const targets = usedSheets.map(name => ({ sheetName: name, a1: null }))
-    .concat([{ sheetName: SHEETS.ARCHIVE, a1: achievementKeysA1() }])
-    .concat([SHEETS.ARCHIVE, SHEETS.LOG].map(name => ({ sheetName: name, a1: null, reference: true })));
+    .concat([{ sheetName: SHEETS.ACHIEVEMENT, a1: achievementKeysA1() }])
+    .concat([SHEETS.ACHIEVEMENT, SHEETS.LOG].map(name => ({ sheetName: name, a1: null, reference: true })));
 
   const batched = batchReadValues(spreadsheetId, targets);
   let ngCount = 0;

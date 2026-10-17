@@ -106,6 +106,13 @@ class StaffRepository {
   }
 
   /**
+   * 氏名が登録済みのスタッフの氏名（未登録・存在しなければ undefined）
+   */
+  findRegisteredName(userId) {
+    return this.findAll().find(x => x.userId === userId && x.name)?.name;
+  }
+
+  /**
    * 氏名で取得
    * @return {Staff|null}
    */

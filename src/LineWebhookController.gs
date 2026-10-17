@@ -1,363 +1,237 @@
 /**
- * WebHookの操作
+ * LINE の Webhook（友だち追加・メッセージ）
  */
 class LineWebhookController {
-  /**
-   * コンストラクタ
-   */
   constructor(params) {
-    this.params = params;
+    // 1回の Webhook に複数のイベントがあっても、最初の1件だけ処理する（従来どおり）
     this.event = params.events?.[0];
   }
 
-  /**
-   * 分岐処理
-   */
   handle() {
     try {
       if (!this.event) return;
-
-      switch (this.event.type) {
-        // フォロー
-        case LINE_EVENT.FOLLOW:
-          this.handleFollow();
-          break;
-        // メッセージ
-        case LINE_EVENT.MESSAGE:
-          this.handleMessage();
-          break;
-      }
+      if (this.event.type === LINE_EVENT.FOLLOW) this._handleFollow();
+      if (this.event.type === LINE_EVENT.MESSAGE) this._handleMessage();
     } catch (e) {
-      const errorDetail = {
-        message: e.message,
-        stack: e.stack,
-        fileName: e.fileName,
-        lineNumber: e.lineNumber,
-        eventData: JSON.stringify(this.event)
-      };  
-      writeLog(this.event.source.userId, this.event.type, 'ERROR', errorDetail);
+      writeLog(this.event.source.userId, this.event.type, "ERROR", errorLogContent(e, this.event));
     }
   }
 
-  /**
-   * フォロー操作
-   */
-  handleFollow() {
+  // --- 友だち追加 ---
+
+  /** スタッフマスタに未登録なら、LINE の表示名と追加日時を追加する */
+  _handleFollow() {
     const userId = this.event.source.userId;
     const staffs = getRepositories().staffs;
-
-    // 既に登録されている場合処理終了
     if (staffs.findByUserId(userId)) return;
 
-    // LINEプロフィール情報を取得
-    const profile = this.getProfile(userId);
-
-    // シートに追加（A〜C列）
     const staff = new Staff();
     staff.userId = userId;
-    staff.lineName = profile.displayName;
+    staff.lineName = this._lineDisplayName(userId);
     staff.followedAt = new Date();
     staffs.add(staff);
 
-    writeLog(userId, "follow", 'SUCCESS', {message : "SUCCESS" });
+    writeLog(userId, "follow", "SUCCESS", { message: "SUCCESS" });
   }
 
-  /**
-   * LINEプロフィール取得
-   */
-  getProfile(userId) {
+  _lineDisplayName(userId) {
     try {
-      return getLineClient().getProfile(userId);
+      return getLineClient().getProfile(userId).displayName;
     } catch {
-      return { displayName: "名前取得不可" };
+      return "名前取得不可";
     }
   }
 
-  /**
-   * メッセージ操作
-   */
-  handleMessage() { 
-    // テキストのみ処理
+  // --- メッセージ ---
+
+  _handleMessage() {
     if (this.event.message.type !== LINE_MESSAGE_TYPE.TEXT) return;
 
-    let replyText = "";
-
-    const userMsg = this.event.message.text;
+    const text = this.event.message.text;
     const userId = this.event.source.userId;
+    const replyToken = this.event.replyToken;
+    const route = this._route(text, userId);
 
-    // 送信者の氏名（氏名が登録済みのスタッフのみ。未登録なら undefined）
-    // スタッフマスタの読み込みに時間がかかるため、氏名を使う処理のときだけ読む
-    const getStaffName = () => getRepositories().staffs.findAll().find(x => x.userId === userId && x.name)?.name;
-
-    // この後で読むシートを1回でまとめて読んでおく（BATCH_READ=true のときだけ）
-    prefetchSheetValues(getAppConfig().spreadsheetId, this._sheetsNeededFor(userMsg));
+    // このあと読むシートを1回でまとめて読んでおく（BATCH_READ=true のときだけ）
+    prefetchSheetValues(getAppConfig().spreadsheetId, [SHEETS.SYSTEM_STATUS].concat(route.sheets));
 
     if (getRepositories().systemStatus.get().isMaintenance) {
-      replyToUser(this.event.replyToken, "メンテナンス中です。しばらくお待ちください。");
+      getLineClient().replyText(replyToken, MAINTENANCE_MESSAGE);
       return;
     }
 
-    // 勤務確認
-    if (isWorkConfirmMessage(userMsg)) {
-      replyText = this.confirmWork(userId, userMsg);
-    }
-    // 実績入力
-    else if (startsWithPrefix(userMsg, MESSAGE_PREFIX.ACHIEVE_DONE)) {
-      replyText = "お疲れさまでした！";
-    }
-    // スタッフ情報入力
-    else if (startsWithPrefix(userMsg, MESSAGE_PREFIX.PROFILE_DONE)) {
-      replyText = "スタッフ情報の登録が完了しました！";
-    }
-    // 店舗一覧クイックリプライ作成
-    else if (startsWithPrefix(userMsg, MESSAGE_PREFIX.SHOP_LIST)) {
-      this.createShopQuickReplies(getStaffName());
-      return;
-    }
-    // 店舗詳細(userMsgは店舗名)
-    else if (startsWithPrefix(userMsg, MESSAGE_PREFIX.SHOP_DETAIL)) {
-      replyText = this.getShopDetail(userMsg, getStaffName());
-    }
-    else if (startsWithPrefix(userMsg, MESSAGE_PREFIX.GET_ASSIGNED_STORE)) {
-      replyText = this.getShift(userId, getStaffName());
-    }
-    else if(userMsg.length >= 10){
-      this.notifyAdminOfFreeMessage(userId, getStaffName(), userMsg)
-    }
-    
-    // 返信メッセージが設定されていた場合
-    if (replyText) {
-      replyToUser(this.event.replyToken, replyText);
-    }
+    const replyText = route.run();
+    if (route.repliesItself) return; // 自分で返信する処理は LOG に書かない（従来どおり）
 
-    writeLog(userId, "message", 'SUCCESS', {message : userMsg });
+    if (replyText) getLineClient().replyText(replyToken, replyText);
+    writeLog(userId, "message", "SUCCESS", { message: text });
   }
 
   /**
-   * メッセージの処理で読むシート（まとめて読むため）
-   * ※ handleMessage の分岐と同じ順番・条件にすること
+   * メッセージの内容ごとの処理（上から順に判定する）
+   *   sheets        ：処理で読むシート（まとめて読むため）
+   *   run           ：処理。返信する文言を返す（返信しなければ空）
+   *   repliesItself ：run の中で返信まで行う
    */
-  _sheetsNeededFor(userMsg) {
-    const sheets = [SHEETS.SYSTEM_STATUS];
-    if (isWorkConfirmMessage(userMsg)) {
-      sheets.push(SHEETS.SCHEDULE);
-    } else if (startsWithPrefix(userMsg, MESSAGE_PREFIX.ACHIEVE_DONE) || startsWithPrefix(userMsg, MESSAGE_PREFIX.PROFILE_DONE)) {
-      // シートは読まない
-    } else if (startsWithPrefix(userMsg, MESSAGE_PREFIX.SHOP_LIST)) {
-      sheets.push(SHEETS.STAFF, SHEETS.SHIFT_TABLE);
-    } else if (startsWithPrefix(userMsg, MESSAGE_PREFIX.SHOP_DETAIL)) {
-      sheets.push(SHEETS.STAFF, SHEETS.SHIFT_TABLE, SHEETS.STORE);
-    } else if (startsWithPrefix(userMsg, MESSAGE_PREFIX.GET_ASSIGNED_STORE)) {
-      sheets.push(SHEETS.STAFF, SHEETS.ADMIN, SHEETS.SHIFT_TABLE, SHEETS.HOLIDAY);
-    } else if (userMsg.length >= 10) {
-      sheets.push(SHEETS.STAFF, SHEETS.ADMIN);
+  _route(text, userId) {
+    const startsWith = prefix => String(text || "").startsWith(prefix);
+    // 送信者の氏名（スタッフマスタを読むのに時間がかかるため、使う処理のときだけ読む）
+    const staffName = () => getRepositories().staffs.findRegisteredName(userId);
+
+    if (startsWith(MESSAGE_PREFIX.PREV_DONE) || startsWith(MESSAGE_PREFIX.TODAY_DONE)) {
+      return { sheets: [SHEETS.SCHEDULE], run: () => this._confirmWork(userId, text) };
     }
-    return sheets;
+    if (startsWith(MESSAGE_PREFIX.ACHIEVE_DONE)) {
+      return { sheets: [], run: () => "お疲れさまでした！" };
+    }
+    if (startsWith(MESSAGE_PREFIX.PROFILE_DONE)) {
+      return { sheets: [], run: () => "スタッフ情報の登録が完了しました！" };
+    }
+    if (startsWith(MESSAGE_PREFIX.SHOP_LIST)) {
+      return { sheets: [SHEETS.STAFF, SHEETS.SHIFT_TABLE], run: () => this._replyShopList(staffName()), repliesItself: true };
+    }
+    if (startsWith(MESSAGE_PREFIX.SHOP_DETAIL)) {
+      return { sheets: [SHEETS.STAFF, SHEETS.SHIFT_TABLE, SHEETS.STORE], run: () => this._shopDetail(text, staffName()) };
+    }
+    if (startsWith(MESSAGE_PREFIX.GET_ASSIGNED_STORE)) {
+      return { sheets: [SHEETS.STAFF, SHEETS.ADMIN, SHEETS.SHIFT_TABLE, SHEETS.HOLIDAY], run: () => this._shiftText(userId, staffName()) };
+    }
+    if (text.length >= 10) {
+      return { sheets: [SHEETS.STAFF, SHEETS.ADMIN], run: () => this._notifyAdmins(userId, staffName(), text) };
+    }
+    return { sheets: [], run: () => "" };
   }
 
   /**
-   * 勤務アラート確認
+   * 前日確認・当日確認のボタン（"前日確認済み:yyyy/MM/dd"）で、勤務管理の確認欄を「確認済み」にする
    */
-  confirmWork(userId, userMsg) {
+  _confirmWork(userId, text) {
     const schedules = getRepositories().schedules;
+    const isPrevious = text.startsWith(MESSAGE_PREFIX.PREV_DONE);
+    const targetDate = text.split(":")[1];
 
-    const targetDate = userMsg.split(":")[1];
-    for (const schedule of schedules.findAll()) {
-      if (schedule.userId !== userId) continue;
+    const schedule = schedules.findAll().find(x => {
+      if (x.userId !== userId) return false;
+      const workDate = new Date(x.workDate);
+      return !isNaN(workDate) && toJstSlashDate(workDate) === targetDate;
+    });
+    if (!schedule) return "該当する勤務データが見つかりませんでした。";
 
-      const d = new Date(schedule.workDate);
-      if (isNaN(d)) continue;
-
-      const rowDate = toJstYmdSlash(d);
-      if (rowDate === targetDate) {
-        if (isPrevConfirmMessage(userMsg)) {
-          schedule.prevCheck = CHECK_STATUS.DONE;
-          schedules.updatePrevCheck(schedule);
-          return "明日の勤務確認ありがとうございます。";
-        } else if (isTodayConfirmMessage(userMsg)) {
-          schedule.todayCheck = CHECK_STATUS.DONE;
-          schedules.updateTodayCheck(schedule);
-          return "当日の勤務確認ありがとうございます。";
-        }
-      }
+    if (isPrevious) {
+      schedule.prevCheck = CHECK_STATUS.DONE;
+      schedules.updatePrevCheck(schedule);
+      return "明日の勤務確認ありがとうございます。";
     }
-
-    return "該当する勤務データが見つかりませんでした。";
+    schedule.todayCheck = CHECK_STATUS.DONE;
+    schedules.updateTodayCheck(schedule);
+    return "当日の勤務確認ありがとうございます。";
   }
 
-  /**
-   * 店舗クイックリプライ作成
-   */
-  createShopQuickReplies(staffName) {
-    // 指定した氏名がシフトに入っている店舗一覧を取得
-    const assignedStores = getRepositories().shiftTable.findStoreNamesByStaffName(staffName);
+  /** 担当店舗（シフトに入っている店舗）をボタンで選べるようにして返信する */
+  _replyShopList(staffName) {
+    const storeNames = getRepositories().shiftTable.findStoreNamesByStaffName(staffName);
+    const line = getLineClient();
 
-    if (assignedStores.length === 0) {
-      // 割り当て店舗がない場合の処理
-      const noStorePayload = {
-        replyToken: this.event.replyToken,
-        messages: [{ type: "text", text: "担当店舗が見つかりませんでした。" }]
-      };
-      lineApiFetch(LINE_API_URL.REPLY, noStorePayload);
+    if (storeNames.length === 0) {
+      line.replyText(this.event.replyToken, "担当店舗が見つかりませんでした。");
       return;
     }
-    // 取得した店舗リスト（配列）からボタンのアイテムを生成
-    const quickReplyItems = assignedStores.map(storeName => {
-      return {
-        type: "action",
-        action: {
-          type: "message",
-          label: storeName, // ボタンに表示される文字
-          text: MESSAGE_PREFIX.SHOP_DETAIL + storeName   // タップした時に送信される文字
-        }
-      };
-    });
+    line.reply(this.event.replyToken, [{
+      type: "text",
+      text: "以下から店舗を選択してください。",
+      quickReply: {
+        items: storeNames.map(storeName => ({
+          type: "action",
+          action: { type: "message", label: storeName, text: MESSAGE_PREFIX.SHOP_DETAIL + storeName },
+        })),
+      },
+    }]);
+  }
 
-    // ペイロード作成
-    const payload = {
-      replyToken: this.event.replyToken,
-      messages: [
-        {
-          type: "text",
-          text: "以下から店舗を選択してください。",
-          quickReply: {
-            items: quickReplyItems
-          }
-        }
-      ]
-    };
-
-    // 送信
-    lineApiFetch(LINE_API_URL.REPLY, payload);
+  /** 店舗詳細（担当店舗のものだけ） */
+  _shopDetail(text, staffName) {
+    const storeName = text.replace(MESSAGE_PREFIX.SHOP_DETAIL, "");
+    const assignedStores = getRepositories().shiftTable.findStoreNamesByStaffName(staffName);
+    if (!assignedStores.includes(storeName)) return "この店舗の詳細は参照することができません。";
+    return getRepositories().stores.findByStoreName(storeName)?.detail ?? "";
   }
 
   /**
-   * 店舗詳細取得
+   * シフトの確認の返信
+   * 担当範囲が限られた管理者には、担当スタッフのシフトも並べる（このときは予定のない日を省く）
    */
-  getShopDetail(userMsg, staffName){
-    const storeName = userMsg.replace(MESSAGE_PREFIX.SHOP_DETAIL, "");
-  
-    // 1. 担当店舗一覧（配列）を取得
-    const assignedStores = getRepositories().shiftTable.findStoreNamesByStaffName(staffName);
-    
-    // 担当店舗に含まれている、かつ店舗詳細にデータが存在する場合のみ詳細を返す
-    return assignedStores.includes(storeName)
-      ? (getRepositories().stores.findByStoreName(storeName)?.detail ?? "")
-      : "この店舗の詳細は参照することができません。";
+  _shiftText(userId, staffName) {
+    const repos = getRepositories();
+    const admin = repos.admins.findByUserId(userId);
+    const isScopedAdmin = !!admin && !admin.isAllScope;
+
+    let text = "";
+    if (isScopedAdmin) {
+      repos.staffs.findAll()
+        .filter(x => x.userId && x.name && admin.tantoshaCodes.includes(String(x.tantoshaCode)))
+        .forEach(staff => {
+          text += `${staff.name}のシフト\n${this._scheduleText(staff.name, false)}\n\n`;
+        });
+    }
+    return text + `${staffName}のシフト\n${this._scheduleText(staffName, !isScopedAdmin)}`;
   }
 
-  getAssignedSchedules(staffName ,isStaff = true) {
-    const shiftTable = getRepositories().shiftTable;
-    const shiftDates = shiftTable.findAllDates();
+  /**
+   * シフト表・希望休から、1人分の予定を「yyyy/MM/dd：店舗, 店舗, 希望休」の行で並べる
+   * 来月のシフトが未確定の間は、今月の分だけ
+   * @param {boolean} includeDaysWithoutShift シフト表にある日をすべて並べる（予定のない日は「yyyy/MM/dd：」）
+   */
+  _scheduleText(staffName, includeDaysWithoutShift) {
+    const repos = getRepositories();
+    const shiftDates = repos.shiftTable.findAllDates();
     if (shiftDates.length === 0) return "データがありません";
 
-    const isUnconfirmed = getRepositories().systemStatus.get().isNextShiftUnconfirmed;
+    const plans = new Map(); // yyyy/MM/dd → 予定
+    const addPlan = (date, plan) => {
+      const current = plans.get(date);
+      plans.set(date, current ? `${current}, ${plan}` : plan);
+    };
 
-    const now = new Date();
-    const currentYearMonth = Utilities.formatDate(now, "JST", "yyyy/MM"); // "2026/04" 形式
-
-    const scheduleMap = new Map();
-
-    // まず、A列にあるすべての日付をMapに登録する（初期値は空）
-    shiftDates.forEach(shiftDate => {
-      const rawDate = shiftDate.date;
-
-      if (!rawDate || isNaN(new Date(rawDate).getTime())) {
-        return;
-      }
-      const date = toJstYmdSlash(rawDate);
-      if (date && isStaff) {
-        scheduleMap.set(date, "");
-      }
-    });
-
-    // シフト表を走査して予定を埋める（1日に複数箇所ある場合はカンマ区切りで追加）
-    shiftTable.findAll()
-      .filter(x => x.staffName === staffName)
-      .forEach(x => {
-        const date = toJstYmdSlash(x.date);
-        if (!date) return;
-
-        const current = scheduleMap.get(date);
-        scheduleMap.set(date, current ? `${current}, ${x.storeName}` : x.storeName);
-      });
-
-    // 希望休を走査して予定を埋める（シフト表にない日付は無視）
-    getRepositories().holidays.findAll()
-      .filter(x => x.staffName === staffName)
-      .forEach(x => {
-        const date = toJstYmdSlash(x.date);
-        if (!date || !scheduleMap.has(date)) return;
-
-        const current = scheduleMap.get(date);
-        scheduleMap.set(date, current ? `${current}, 希望休` : "希望休");
-      });
-
-    // 予定がない場合は「yyyy/MM/dd：」だけになる
-    const sortedDates = Array.from(scheduleMap.keys()).sort();
-    // --- 修正：フィルタ処理を加えてリスト化 ---
-    const resultList = sortedDates
-      .filter(date => {
-        if (isUnconfirmed) {
-          // 未確定の場合、日付の先頭(yyyy/MM)が今月と一致するかチェック
-          return date.startsWith(currentYearMonth);
-        }
-        return true; // 確定済みならすべて通す
-      })
-      .map(date => {
-        const detail = scheduleMap.get(date);
-        return `${date}：${detail}`;
-      });
-
-    return resultList.length > 0 ? resultList.join("\n") : "予定はありません";
-  }
-
-  getShift(userId, staffName){
-    let replyText = "";
-    let isStaff = true;
-
-    // 1. 管理者シートから対象のユーザーIDを持つデータを探す
-    const adminData = getRepositories().admins.findByUserId(userId);
-
-    // 2. データが存在し、かつ担当範囲が "ALL" ではない場合
-    if (adminData && !adminData.isAllScope) {
-      isStaff = false;
-      const allowedTantoCodes = adminData.tantoshaCodes;
-
-      // 3. 担当範囲のスタッフ（氏名登録済み）を抽出
-      //    数値の担当者コードを文字列に変換して比較する
-      const targetStaffs = getRepositories().staffs.findAll().filter(x =>
-        x.userId && x.name && allowedTantoCodes.includes(String(x.tantoshaCode))
-      );
-
-      // 4. スタッフごとにシフトを組み立て
-      targetStaffs.forEach(staff => {
-        const schedules = this.getAssignedSchedules(staff.name, isStaff);
-
-        replyText += `${staff.name}のシフト\n`;
-        replyText += `${schedules}\n\n`; // 見やすさのために最後に空行を追加
+    if (includeDaysWithoutShift) {
+      shiftDates.forEach(({ date }) => {
+        if (!date || isNaN(new Date(date).getTime())) return;
+        const day = toJstSlashDate(date);
+        if (day) plans.set(day, "");
       });
     }
-    replyText += `${staffName}のシフト\n`;
-    replyText += `${this.getAssignedSchedules(staffName, isStaff)}`;
-    return replyText;
+    repos.shiftTable.findAll()
+      .filter(x => x.staffName === staffName)
+      .forEach(x => {
+        const day = toJstSlashDate(x.date);
+        if (day) addPlan(day, x.storeName);
+      });
+    // 希望休は、上で並べた日のものだけ
+    repos.holidays.findAll()
+      .filter(x => x.staffName === staffName)
+      .forEach(x => {
+        const day = toJstSlashDate(x.date);
+        if (day && plans.has(day)) addPlan(day, "希望休");
+      });
+
+    const isNextMonthUnconfirmed = repos.systemStatus.get().isNextShiftUnconfirmed;
+    const thisMonth = Utilities.formatDate(new Date(), "JST", "yyyy/MM");
+    const lines = Array.from(plans.keys()).sort()
+      .filter(day => !isNextMonthUnconfirmed || day.startsWith(thisMonth))
+      .map(day => `${day}：${plans.get(day)}`);
+    return lines.length > 0 ? lines.join("\n") : "予定はありません";
   }
 
-  notifyAdminOfFreeMessage(userId, staffName, userMsg){
-    const tantoshaCode = getRepositories().staffs.findByUserId(userId)?.tantoshaCode;
+  /** 10文字以上の自由なメッセージを、送信者を担当する管理者へ知らせる */
+  _notifyAdmins(userId, staffName, text) {
+    const repos = getRepositories();
+    const tantoshaCode = repos.staffs.findByUserId(userId)?.tantoshaCode;
+    const message = textMessage(`${staffName}さんから問い合わせがありました。\n【内容】\n${text}`);
 
-    // 全員担当 or 担当者コードが一致する管理者
-    const targetAdmins = getRepositories().admins.findAll().filter(admin => admin.isInCharge(tantoshaCode));
-
-    const message = `${staffName}さんから問い合わせがありました。\n【内容】\n${userMsg}`;
-
-    let payload = "";
-    targetAdmins.forEach(admin => {
-      payload = {
-        to: admin.userId,
-        messages: [{ type: 'text', text: message }]
-      };
-      lineApiFetch(LINE_API_URL.PUSH, payload);
-    });
+    const line = getLineClient();
+    repos.admins.findAll()
+      .filter(admin => admin.isInCharge(tantoshaCode))
+      // 宛先が不正な管理者への送信に失敗すると、残りの管理者には送られない（既知の不具合 #6）
+      .forEach(admin => line.push(admin.userId, [message]));
+    return "";
   }
 }

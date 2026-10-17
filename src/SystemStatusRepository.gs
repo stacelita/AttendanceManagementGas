@@ -23,7 +23,7 @@ class SystemStatus {
 
   /** メンテナンス中か（「稼働中」以外はすべてメンテナンス中扱い） */
   get isMaintenance() {
-    return this.operationStatus !== KADO_STATUS.ACTIVE;
+    return this.operationStatus !== OPERATION_STATUS.ACTIVE;
   }
 
   /** 来月のシフトが未確定か */
