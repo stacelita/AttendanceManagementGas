@@ -27,10 +27,10 @@ function dispatchRequest(params, proxyKey) {
   return params.action ? handleLiffRequest_(params) : handleWebhook_(params, proxyKey);
 }
 
-/** LIFF からのリクエスト（部署は dept パラメータ。省略時は既定の部署） */
+/** LIFF からのリクエスト（部署は dept パラメータで指定する。省略・未登録の部署はエラー） */
 function handleLiffRequest_(params) {
-  const departmentCode = params.dept || getDepartmentCodes()[0];
-  if (!isDepartmentCode(departmentCode)) {
+  const departmentCode = params.dept;
+  if (!departmentCode || !isDepartmentCode(departmentCode)) {
     return jsonResponse({ status: "error", message: "unknown department" });
   }
   useDepartment(departmentCode);
@@ -42,20 +42,15 @@ function handleWebhook_(params, proxyKey) {
   if (!params.events?.[0]) return;
 
   // Worker（署名を検証済み）を通ってきたリクエストか確認する（PROXY_SECRET 設定時のみ）
+  // 部署が決まる前なので LOG シートには書けない。GAS の「実行数」の画面にエラーとして残す
   if (!isValidProxyKey(proxyKey)) {
-    writeLog("SYSTEM", "WEBHOOK", "ERROR", {
-      message: "合言葉（key）が一致しないため処理しません（署名検証を通っていない可能性）",
-      destination: params.destination,
-    });
+    console.error("WEBHOOK：合言葉（key）が一致しないため処理しません（署名検証を通っていない可能性）", params.destination);
     return;
   }
 
   const departmentCode = findDepartmentByBotUserId(params.destination);
   if (!departmentCode) {
-    writeLog("SYSTEM", "WEBHOOK", "ERROR", {
-      message: "destination がどの部署の BOT_USER_ID とも一致しないため処理しません",
-      destination: params.destination,
-    });
+    console.error("WEBHOOK：destination がどの部署の BOT_USER_ID とも一致しないため処理しません", params.destination);
     return;
   }
   useDepartment(departmentCode);

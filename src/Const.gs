@@ -95,6 +95,7 @@ const ACTIONS = {
   RECORD_PROFILE: "record_profile",
   GET_PROFILE: "get_profile",
   IS_MAINTENANCE: "is_maintenance",
+  GET_PAGE_DATA: "get_page_data", // 画面の表示に必要なもの（メンテナンス状態・区分値）を1回で返す
 };
 
 /** 個人のデータを扱う action（LIFF の ID トークンで本人確認する） */

@@ -8,7 +8,7 @@
  * 部署ごとの値は「部署コード_」を先頭に付けたキーで持つ（例：SALES1_SPREADSHEET_ID）。
  *
  * 共通（必須）:
- *   DEPARTMENTS                       部署コードの一覧（カンマ区切り。先頭が既定の部署） 例：SALES1,SALES2
+ *   DEPARTMENTS                       部署コードの一覧（カンマ区切り。順番に意味はない） 例：SALES1,SALES2
  *   LINE_MODE                         production / test（未設定・それ以外の値はLINE送信を停止）
  * 共通（任意）:
  *   TEST_LINE_USER_ID                 テストモード時の送信先（未設定ならTEST_LOGに記録するだけで送信しない）
@@ -90,7 +90,7 @@ class AppConfig {
 
 // 同一実行中はプロパティを1回だけ読む
 let _scriptPropertiesCache = null;
-// 現在処理中の部署（未指定なら DEPARTMENTS の先頭）
+// 現在処理中の部署（useDepartment で選ぶ。既定の部署はない）
 let _currentDepartmentCode = null;
 let _appConfigCache = null;
 
@@ -211,12 +211,14 @@ function runForAllDepartments(fn) {
 }
 
 /**
- * 現在処理中の部署の設定を取得
+ * 現在処理中の部署の設定を取得（先に useDepartment で部署を選んでおくこと）
  */
 function getAppConfig() {
   if (!_appConfigCache) {
-    const departmentCode = _currentDepartmentCode || getDepartmentCodes()[0];
-    _appConfigCache = new AppConfig(getScriptProperties_(), departmentCode);
+    if (!_currentDepartmentCode) {
+      throw new Error("部署が選ばれていません。先に useDepartment で部署を選んでください。");
+    }
+    _appConfigCache = new AppConfig(getScriptProperties_(), _currentDepartmentCode);
   }
   return _appConfigCache;
 }
@@ -237,6 +239,54 @@ function showBotUserIds() {
     const botInfo = JSON.parse(res.getContentText());
     console.log(`部署 ${code}：公式アカウント「${botInfo.displayName}」 ${code}_${PROPERTY_KEY.BOT_USER_ID} = ${botInfo.userId}`);
   });
+}
+
+/**
+ * DEPARTMENTS にまだ入れていない部署の設定確認（移行の事前確認用。読み取りのみ。本番のエディタから実行してよい）
+ * DEPARTMENTS に入れると、その瞬間から Webhook・通知の処理対象になるため、入れる前にこれで確認する
+ *   ・トークンの公式アカウント名と BotユーザーID（<部署>_BOT_USER_ID に設定する値）
+ *   ・スプレッドシートを開けるか（シート名の一覧）
+ *   ・<部署>_BOT_USER_ID・<部署>_ACHIEVE_LIFF_ID が設定済みか
+ */
+function previewDepartmentSettings(departmentCode) {
+  const props = getScriptProperties_();
+  const prop = key => (props[`${departmentCode}_${key}`] || "").trim();
+  const result = { department: departmentCode, enabled: getDepartmentCodes().includes(departmentCode) };
+
+  const token = prop(PROPERTY_KEY.LINE_CHANNEL_ACCESS_TOKEN);
+  if (token) {
+    const res = UrlFetchApp.fetch(LINE_API_URL.BOT_INFO, { headers: { Authorization: "Bearer " + token }, muteHttpExceptions: true });
+    const botInfo = res.getResponseCode() === 200 ? JSON.parse(res.getContentText()) : null;
+    result.lineAccountName = botInfo ? botInfo.displayName : `取得できません（HTTP ${res.getResponseCode()}）`;
+    result.botUserIdFromToken = botInfo ? botInfo.userId : "";
+    result.botUserId = prop(PROPERTY_KEY.BOT_USER_ID) || "（未設定）";
+    result.botUserIdMatches = botInfo && botInfo.userId === prop(PROPERTY_KEY.BOT_USER_ID) ? "OK" : "NG（上の botUserIdFromToken を設定してください）";
+  } else {
+    result.lineAccountName = `（${departmentCode}_${PROPERTY_KEY.LINE_CHANNEL_ACCESS_TOKEN} が未設定）`;
+  }
+
+  const spreadsheetId = prop(PROPERTY_KEY.SPREADSHEET_ID);
+  if (spreadsheetId) {
+    try {
+      const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+      result.spreadsheetName = spreadsheet.getName();
+      const sheetNames = spreadsheet.getSheets().map(x => x.getName());
+      const requiredSheets = Object.values(SHEETS);
+      result.missingSheets = requiredSheets.filter(x => !sheetNames.includes(x));
+    } catch (e) {
+      result.spreadsheetName = "開けません：" + e.message;
+    }
+  } else {
+    result.spreadsheetName = `（${departmentCode}_${PROPERTY_KEY.SPREADSHEET_ID} が未設定）`;
+  }
+
+  result.achieveLiffId = prop(PROPERTY_KEY.ACHIEVE_LIFF_ID) || "（未設定）";
+  console.log(result);
+}
+
+/** 1部の移行前の確認（エディタから実行する用） */
+function previewSales1Settings() {
+  previewDepartmentSettings("SALES1");
 }
 
 /**

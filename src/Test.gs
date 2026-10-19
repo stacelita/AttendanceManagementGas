@@ -71,7 +71,7 @@ function test_checkFiles() {
     "ScheduleTransfer": typeof updateWorkManagement,
     "ShiftResend": typeof onShiftTableEdit,
     "Trigger": typeof setupTrigger,
-    "Diagnostics": typeof measurePerformance,
+    "Diagnostics": typeof measurePerformanceSales1,
   };
   const missing = Object.keys(required).filter(name => required[name] === "undefined");
   console.log(missing.length === 0

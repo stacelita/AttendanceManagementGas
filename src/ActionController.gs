@@ -36,6 +36,7 @@ class ActionController {
       [ACTIONS.RECORD_PROFILE]: () => this.recordProfile(),
       [ACTIONS.GET_PROFILE]: () => this.getProfile(),
       [ACTIONS.IS_MAINTENANCE]: () => this.getMaintenanceStatus(),
+      [ACTIONS.GET_PAGE_DATA]: () => this.getPageData(),
     };
   }
 
@@ -45,7 +46,10 @@ class ActionController {
       case ACTIONS.RECORD_ACHIEVE:
         return [SHEETS.SYSTEM_STATUS, SHEETS.SCHEDULE, SHEETS.STAFF, { sheetName: SHEETS.ACHIEVEMENT, a1: achievementKeysA1() }];
       case ACTIONS.RECORD_PROFILE:
+      case ACTIONS.GET_PROFILE:
         return [SHEETS.SYSTEM_STATUS, SHEETS.STAFF];
+      case ACTIONS.GET_PAGE_DATA:
+        return [SHEETS.SYSTEM_STATUS, SHEETS.CONST];
       default:
         return [];
     }
@@ -148,7 +152,7 @@ class ActionController {
     return jsonResponse({ status: "success", message: "Updated successfully" });
   }
 
-  /** 登録済みのスタッフ情報（氏名が未登録なら profile: null） */
+  /** 登録済みのスタッフ情報（氏名が未登録なら profile: null）。画面の表示用に、メンテナンス状態も返す */
   getProfile() {
     // 従来どおり == で比べる
     const staff = getRepositories().staffs.findAll().find(x => x.userId == this.params.userId);
@@ -163,6 +167,7 @@ class ActionController {
         station: staff.station,
         phone: staff.tel,
       } : null,
+      is_maintenance: getRepositories().systemStatus.get().isMaintenance,
     });
   }
 
@@ -170,15 +175,40 @@ class ActionController {
   getCategory() {
     const missing = this._missingParamsResponse(["kubunType"]);
     if (missing) return missing;
-
-    const items = getRepositories().consts.findAll()
-      .filter(x => String(x.categoryId) === this.params.kubunType)
-      .map(x => ({ value: String(x.itemValue), name: String(x.itemName) }));
-    return jsonResponse(items);
+    return jsonResponse(this._categoryItems(this.params.kubunType));
   }
 
   getMaintenanceStatus() {
     return jsonResponse({ status: "success", is_maintenance: getRepositories().systemStatus.get().isMaintenance });
+  }
+
+  /**
+   * 画面の表示に必要なものをまとめて返す（GAS の呼び出しを1回で済ませるため）
+   *   kubunTypes：区分ID（カンマ区切り。例 "1,2"）
+   * @return {status, is_maintenance, categories: {区分ID: [{value, name}]}}
+   */
+  getPageData() {
+    const missing = this._missingParamsResponse(["kubunTypes"]);
+    if (missing) return missing;
+
+    const categories = {};
+    String(this.params.kubunTypes).split(",")
+      .map(x => x.trim())
+      .filter(x => x)
+      .forEach(kubunType => { categories[kubunType] = this._categoryItems(kubunType); });
+
+    return jsonResponse({
+      status: "success",
+      is_maintenance: getRepositories().systemStatus.get().isMaintenance,
+      categories,
+    });
+  }
+
+  /** 区分IDの区分値 [{value, name}]（定数シートの並び順） */
+  _categoryItems(kubunType) {
+    return getRepositories().consts.findAll()
+      .filter(x => String(x.categoryId) === kubunType)
+      .map(x => ({ value: String(x.itemValue), name: String(x.itemName) }));
   }
 
   // --- 本人確認・入力チェック ---

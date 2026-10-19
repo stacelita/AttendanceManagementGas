@@ -2,16 +2,14 @@
  * 処理時間の測定（診断用。読み取りのみで、シートへの書き込みやLINEの送信は行わない）
  *
  * エディタから実行し、実行ログを確認する。
- *   measurePerformance       ：DEPARTMENTS の先頭の部署
- *   measurePerformanceSales1 ：SALES1（DEPARTMENTS に入れていなくても、SALES1_SPREADSHEET_ID があれば測れる）
+ *   measurePerformanceSales1 / measurePerformanceSales2：その部署（DEPARTMENTS に入れていなくても、<部署>_SPREADSHEET_ID があれば測れる）
  */
-function measurePerformance() {
-  const props = PropertiesService.getScriptProperties().getProperties();
-  measurePerformanceFor_((props[PROPERTY_KEY.DEPARTMENTS] || "").split(",")[0].trim());
-}
-
 function measurePerformanceSales1() {
   measurePerformanceFor_("SALES1");
+}
+
+function measurePerformanceSales2() {
+  measurePerformanceFor_("SALES2");
 }
 
 function measurePerformanceFor_(departmentCode) {
@@ -88,16 +86,14 @@ function measurePerformanceFor_(departmentCode) {
  * まとめ読み（BATCH_READ）の確認（診断用。読み取りのみ）
  * 本物のシートで、従来の読み方（getValues）と、まとめ読み（Sheets API の batchGet）の結果が
  * 1セルずつ一致するかを比べ、あわせて読み込み時間を比べる。
- *   verifyBatchRead       ：DEPARTMENTS の先頭の部署
- *   verifyBatchReadSales1 ：SALES1（DEPARTMENTS に入れていなくても、SALES1_SPREADSHEET_ID があれば確認できる）
+ *   verifyBatchReadSales1 / verifyBatchReadSales2：その部署（DEPARTMENTS に入れていなくても、<部署>_SPREADSHEET_ID があれば確認できる）
  */
-function verifyBatchRead() {
-  const props = PropertiesService.getScriptProperties().getProperties();
-  verifyBatchReadFor_((props[PROPERTY_KEY.DEPARTMENTS] || "").split(",")[0].trim());
-}
-
 function verifyBatchReadSales1() {
   verifyBatchReadFor_("SALES1");
+}
+
+function verifyBatchReadSales2() {
+  verifyBatchReadFor_("SALES2");
 }
 
 function verifyBatchReadFor_(departmentCode) {
