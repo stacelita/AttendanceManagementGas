@@ -9,6 +9,10 @@
  *   勤務がなくなった人  ：勤務管理の行を削除して「勤務はなくなりました」を送る
  *   ※比べるのはスタッフ単位（1人が1日に入る店舗は1つ）。アラートOFFの店舗の人には送らない
  *
+ * 明日の分だけの扱い
+ *   ・今日の 11:45 の転記（updateWorkManagement）が済むまでは何もしない（転記で全員分が入り、12:00 に前日確認が届くため）
+ *   ・転記のあとなら、勤務管理に明日の行が1件もなくても、シフト表の全員を追加して送る
+ *
  * 今日の分だけの扱い
  *   ・空にするのは当日確認（前日確認・実績入力状況はそのまま）
  *   ・終了時刻を過ぎた勤務は、勤務管理だけ直して送らない
@@ -24,8 +28,7 @@ function shiftResendTargets_() {
       label: "明日", dayWord: "明日", addDays: 1,
       alertType: ALERT_TYPE.PREVIOUS, title: "【変更】前日確認", altText: "【変更】前日の勤務確認：",
       checkToClear: "prevCheck",
-      // 11:45 の転記より前は勤務管理に明日の行がない（転記で全員分が入るので、ここでは何もしない）
-      requireTransferred: true,
+      requireTransferred: true, // 今日の 11:45 の転記が済んでから
       isToday: false,
     },
     {
@@ -107,13 +110,14 @@ function applyShiftChanges_(target, now, departmentCode) {
   date.setDate(date.getDate() + target.addDays);
   const workDate = toJstSlashDate(date);
 
+  if (target.requireTransferred && getShiftTransferDate_() !== toJstSlashDate(now)) {
+    return "11:45 の勤務管理への転記の前のため、何もしませんでした。";
+  }
+
   const shiftRow = findShiftRowOfDate_(date);
   if (!shiftRow) return "シフト表に日付が見つかりませんでした。";
 
   const current = findSchedulesOfDate_(workDate);
-  if (target.requireTransferred && current.length === 0) {
-    return "まだ勤務管理に転記されていないため、何もしませんでした。";
-  }
 
   const planned = new Map(findShiftAssignmentsOfRow_(shiftRow).map(x => [x.staffName, x])); // 氏名 → 割り当て
   const currentNames = new Set(current.map(x => x.staffName));

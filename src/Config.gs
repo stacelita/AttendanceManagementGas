@@ -21,6 +21,9 @@
  *   <部署コード>_LINE_CHANNEL_ACCESS_TOKEN LINEチャネルアクセストークン
  *   <部署コード>_ACHIEVE_LIFF_ID           実績入力用LIFFアプリのID（通知の「実績報告」ボタンで開く）
  *   <部署コード>_BOT_USER_ID               公式アカウントのBotユーザーID（Webhookの destination で部署を判別）
+ * 自動で書き込まれる（手で設定しない）:
+ *   <部署コード>_SHIFT_TRANSFER_DATE       明日の勤務を勤務管理へ転記した日（ScheduleTransfer.gs）
+ *   ACHIEVE_REMIND_TRIGGERS_DATE           実績報告のお願いのトリガーを作った日（Trigger.gs）
  *
  * ※ファイルの読み込み順に依存しないよう、トップレベルではクラスを生成しない
  */

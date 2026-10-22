@@ -49,7 +49,24 @@ function transferTomorrowShifts_() {
   } else if (transferred.size > 0) {
     console.log("明日の勤務はすでに転記済みのため、追加しませんでした。");
   }
+  // シフト変更の再送が「明日の分はもう転記済みか」を判断できるよう、転記した日を残す（ShiftResend.gs）
+  setShiftTransferDate_(toJstSlashDate(new Date()));
   return true;
+}
+
+// --- 転記した日（処理中の部署）。スクリプトプロパティ <部署>_SHIFT_TRANSFER_DATE に自動で書き込む（手で設定しない） ---
+
+function shiftTransferDateKey_() {
+  return `${getAppConfig().departmentCode}_SHIFT_TRANSFER_DATE`;
+}
+
+/** 明日の勤務を最後に転記した日（yyyy/MM/dd。まだなければ空） */
+function getShiftTransferDate_() {
+  return PropertiesService.getScriptProperties().getProperty(shiftTransferDateKey_()) || "";
+}
+
+function setShiftTransferDate_(date) {
+  PropertiesService.getScriptProperties().setProperty(shiftTransferDateKey_(), date);
 }
 
 // --- シフト表と勤務管理の共通処理（シフト変更の再送でも使う） ---
