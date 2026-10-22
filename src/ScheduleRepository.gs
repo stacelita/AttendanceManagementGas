@@ -111,7 +111,7 @@ class ScheduleRepository {
   }
 
   /**
-   * シフトの変更を反映（A〜G列をテキスト書式で書き直し、前日確認（H列）も更新。I列以降は変えない）
+   * シフトの変更を反映（A〜G列をテキスト書式で書き直し、前日確認・当日確認（H・I列）も更新。J列は変えない）
    */
   updateShift(schedule) {
     const sheet = this._sheet();
@@ -119,7 +119,7 @@ class ScheduleRepository {
     const range = sheet.getRange(schedule.rowNumber, 1, 1, row.length);
     range.setNumberFormat("@");
     range.setValues([row]);
-    sheet.getRange(schedule.rowNumber, SCHEDULE_COLUMN.PREV_CHECK + 1).setValue(schedule.prevCheck);
+    sheet.getRange(schedule.rowNumber, SCHEDULE_COLUMN.PREV_CHECK + 1, 1, 2).setValues([[schedule.prevCheck, schedule.todayCheck]]);
     this._all = null;
     forgetSheetValues(this.spreadsheetId, SHEETS.SCHEDULE);
   }

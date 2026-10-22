@@ -60,12 +60,25 @@ function dayAlert() {
 function createTriggerAchieveRemind() {
   const { times, errors } = collectTodayScheduleTimes_(schedule => schedule.endTime);
   createTriggersBefore_(sendAchieveRemind.name, times, [0]);
+  // シフト変更の再送が、同じ時刻のトリガーを重ねて作らないよう、作った日を残す（ShiftResend.gs）
+  setAchieveRemindTriggersDate_(toJstSlashDate(new Date()));
 
   // 時刻を取得できなかった部署があれば、取得できた部署の分だけ作ったうえで失敗として記録する
   throwDepartmentErrors(errors);
 }
 
 // --- 内部処理 ---
+
+// 実績報告のお願いのトリガーを作った日（yyyy/MM/dd）。スクリプトプロパティに自動で書き込む（手で設定しない）
+const ACHIEVE_REMIND_TRIGGERS_DATE_KEY = "ACHIEVE_REMIND_TRIGGERS_DATE";
+
+function getAchieveRemindTriggersDate_() {
+  return PropertiesService.getScriptProperties().getProperty(ACHIEVE_REMIND_TRIGGERS_DATE_KEY) || "";
+}
+
+function setAchieveRemindTriggersDate_(date) {
+  PropertiesService.getScriptProperties().setProperty(ACHIEVE_REMIND_TRIGGERS_DATE_KEY, date);
+}
 
 /**
  * 全部署の勤務管理から、今日の勤務の時刻（H:mm）を重複なしで集める

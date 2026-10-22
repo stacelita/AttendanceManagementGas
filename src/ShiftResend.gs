@@ -1,17 +1,42 @@
 /**
  * シフト変更の再送
  *
- * 11:45 に勤務管理へ転記したあとでシフト表(編集)を直したときに、明日の分を勤務管理へ反映し、
- * 変わった人にだけ「【変更】前日確認」を送り直す。
+ * シフト表(編集)を直したときに、明日と今日の分を勤務管理へ反映し、変わった人にだけ送り直す。
  * シフト表(編集)の D67 のチェックボックスにチェックを入れると動く（終わるとチェックを外し、E67 に結果を書く）
  *
- *   勤務場所が変わった人：店舗・入り・開始・終了を上書きし、前日確認を空にして「【変更】前日確認」を送る
- *   明日の勤務が増えた人：勤務管理に追加して「【変更】前日確認」を送る
- *   明日の勤務がなくなった人：勤務管理の行を削除して「勤務はなくなりました」を送る
+ *   勤務場所が変わった人：店舗・入り・開始・終了を上書きし、確認欄を空にして「【変更】前日確認／当日確認」を送る
+ *   勤務が増えた人      ：勤務管理に追加して「【変更】前日確認／当日確認」を送る
+ *   勤務がなくなった人  ：勤務管理の行を削除して「勤務はなくなりました」を送る
  *   ※比べるのはスタッフ単位（1人が1日に入る店舗は1つ）。アラートOFFの店舗の人には送らない
+ *
+ * 今日の分だけの扱い
+ *   ・空にするのは当日確認（前日確認・実績入力状況はそのまま）
+ *   ・終了時刻を過ぎた勤務は、勤務管理だけ直して送らない
+ *   ・13:00 に作る「実績報告のお願い」のトリガーがすでに作られていて、新しい終了時刻の分がなければ作る
  *
  * 準備：setupShiftResendTriggers を1回実行して、各部署のスプレッドシートに編集時のトリガーを登録する
  */
+
+/** 反映する日ごとの設定（明日 → 今日の順に処理する） */
+function shiftResendTargets_() {
+  return [
+    {
+      label: "明日", dayWord: "明日", addDays: 1,
+      alertType: ALERT_TYPE.PREVIOUS, title: "【変更】前日確認", altText: "【変更】前日の勤務確認：",
+      checkToClear: "prevCheck",
+      // 11:45 の転記より前は勤務管理に明日の行がない（転記で全員分が入るので、ここでは何もしない）
+      requireTransferred: true,
+      isToday: false,
+    },
+    {
+      label: "今日", dayWord: "本日", addDays: 0,
+      alertType: ALERT_TYPE.TODAY, title: "【変更】当日確認", altText: "【変更】当日の勤務確認：",
+      checkToClear: "todayCheck",
+      requireTransferred: false,
+      isToday: true,
+    },
+  ];
+}
 
 /**
  * シフト表(編集)が編集されたときに呼ばれる（編集時のトリガー）
@@ -61,33 +86,42 @@ function isShiftResendChecked_(e) {
 }
 
 /**
- * 処理中の部署の、明日のシフトの変更を勤務管理へ反映し、変わった人に送り直す
+ * 処理中の部署の、明日と今日のシフトの変更を勤務管理へ反映し、変わった人に送り直す
  * @param {Date} now 基準時刻（テスト用）
- * @return {string} 結果（E67 に書く文言）
+ * @return {string} 結果（E67 に書く文言。例「明日：…／今日：…」）
  */
 function resendChangedShifts_(now = new Date()) {
   clearRepositories(); // 直したばかりのシフト表を読む
+  const departmentCode = getAppConfig().departmentCode;
+  return shiftResendTargets_()
+    .map(target => `${target.label}：${applyShiftChanges_(target, now, departmentCode)}`)
+    .join("／");
+}
 
-  const tomorrow = new Date(now.getTime());
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const workDate = toJstSlashDate(tomorrow);
+/**
+ * 1日分のシフトの変更を勤務管理へ反映し、変わった人に送り直す
+ * @return {string} 結果
+ */
+function applyShiftChanges_(target, now, departmentCode) {
+  const date = new Date(now.getTime());
+  date.setDate(date.getDate() + target.addDays);
+  const workDate = toJstSlashDate(date);
 
-  const tomorrowRow = findShiftRowOfDate_(tomorrow);
-  if (!tomorrowRow) return "明日の日付がシフト表に見つかりませんでした。";
+  const shiftRow = findShiftRowOfDate_(date);
+  if (!shiftRow) return "シフト表に日付が見つかりませんでした。";
 
-  // 11:45 の転記より前は、勤務管理に明日の行がない（転記で全員分が入るので、ここでは何もしない）
   const current = findSchedulesOfDate_(workDate);
-  if (current.length === 0) return "明日の勤務がまだ勤務管理に転記されていないため、何もしませんでした。";
+  if (target.requireTransferred && current.length === 0) {
+    return "まだ勤務管理に転記されていないため、何もしませんでした。";
+  }
 
-  const planned = new Map(findShiftAssignmentsOfRow_(tomorrowRow).map(x => [x.staffName, x])); // 氏名 → 割り当て
+  const planned = new Map(findShiftAssignmentsOfRow_(shiftRow).map(x => [x.staffName, x])); // 氏名 → 割り当て
   const currentNames = new Set(current.map(x => x.staffName));
 
   const changed = current.filter(x => planned.has(x.staffName) && planned.get(x.staffName).storeName !== x.storeName);
   const added = [...planned.values()].filter(x => !currentNames.has(x.staffName));
   const removed = current.filter(x => !planned.has(x.staffName));
-  if (changed.length + added.length + removed.length === 0) {
-    return "シフト表と勤務管理に違いはありませんでした。";
-  }
+  if (changed.length + added.length + removed.length === 0) return "違いはありませんでした。";
 
   // 店舗詳細にない店舗があれば、途中まで書き換えないよう先に止める
   const stores = getRepositories().stores;
@@ -96,16 +130,19 @@ function resendChangedShifts_(now = new Date()) {
       .concat(added.map(x => x.storeName))
       .filter(storeName => !stores.findByStoreName(storeName))
   )];
-  if (unknownStores.length > 0) {
-    return `店舗詳細にない店舗があるため、中断しました：${unknownStores.join(", ")}`;
-  }
+  if (unknownStores.length > 0) return `店舗詳細にない店舗があるため、中断しました：${unknownStores.join(", ")}`;
+
+  // 実績報告のお願いのトリガーがある終了時刻（書き換える前に調べる。今日の分で、13:00 の作成が済んでいるときだけ）
+  const remindTimes = target.isToday ? achieveRemindTimesWithTrigger_(departmentCode) : null;
 
   // 勤務管理へ反映（上書き → 追加 → 削除の順。削除は下の行から行うので、ほかの行番号に影響しない）
   const schedules = getRepositories().schedules;
   const changedSchedules = changed.map(before => {
     const schedule = scheduleFromAssignment_(planned.get(before.staffName), workDate);
     schedule.rowNumber = before.rowNumber;
-    schedule.prevCheck = ""; // 前日確認済みでも、確認し直してもらう
+    schedule.prevCheck = before.prevCheck;
+    schedule.todayCheck = before.todayCheck;
+    schedule[target.checkToClear] = ""; // 確認済みでも、確認し直してもらう
     schedules.updateShift(schedule);
     return schedule;
   });
@@ -113,10 +150,14 @@ function resendChangedShifts_(now = new Date()) {
   schedules.addRange(addedSchedules);
   schedules.deleteRows(removed);
 
-  // 本人へ送る
+  // 本人へ送る（今日の分は、終了時刻を過ぎた勤務には送らない）
+  const isOngoing = schedule => !(target.isToday && hasShiftEnded_(schedule, workDate, now));
+  const notified = changedSchedules.concat(addedSchedules).filter(isOngoing);
   const sentCount =
-    changedSchedules.concat(addedSchedules).filter(x => sendChangedShiftCheck_(x, workDate)).length +
-    removed.filter(x => sendCanceledShift_(x, tomorrow)).length;
+    notified.filter(x => sendChangedShiftCheck_(x, workDate, target)).length +
+    removed.filter(isOngoing).filter(x => sendCanceledShift_(x, date, target)).length;
+
+  if (remindTimes) createMissingAchieveRemindTriggers_(notified, remindTimes, workDate, now);
 
   writeLog("SYSTEM", "resendChangedShifts", "SUCCESS", {
     workDate,
@@ -128,15 +169,15 @@ function resendChangedShifts_(now = new Date()) {
   return `変更${changed.length}名・追加${added.length}名・取消${removed.length}名を反映し、${sentCount}名に送信しました。`;
 }
 
-/** 「【変更】前日確認」を送る（送れたら true。アラートOFFの店舗・LINE未登録の人には送らない） */
-function sendChangedShiftCheck_(schedule, workDate) {
+/** 「【変更】前日確認／当日確認」を送る（送れたら true。アラートOFFの店舗・LINE未登録の人には送らない） */
+function sendChangedShiftCheck_(schedule, workDate, target) {
   if (!canNotify_(schedule)) return false;
 
-  const definition = Object.assign({}, alertDefinition_(ALERT_TYPE.PREVIOUS), {
-    title: "【変更】前日確認",
-    altText: "【変更】前日の勤務確認：",
+  const definition = Object.assign({}, alertDefinition_(target.alertType), {
+    title: target.title,
+    altText: target.altText,
   });
-  const target = {
+  const alertTarget = {
     userId: schedule.userId,
     userName: schedule.staffName,
     storeName: schedule.storeName,
@@ -146,19 +187,18 @@ function sendChangedShiftCheck_(schedule, workDate) {
   };
   const message = confirmFlexMessage(
     definition.altText + workDate,
-    staffAlertBodyFor_(ALERT_TYPE.PREVIOUS, definition, target, workDate),
+    staffAlertBodyFor_(target.alertType, definition, alertTarget, workDate),
     definition.confirmPrefix + workDate
   );
   return getLineClient().pushOrLogError(schedule.userId, [message], "resendChangedShifts", { workDate });
 }
 
 /** 「勤務はなくなりました」を送る（送れたら true。アラートOFFの店舗・LINE未登録の人には送らない） */
-function sendCanceledShift_(schedule, tomorrow) {
+function sendCanceledShift_(schedule, date, target) {
   if (!canNotify_(schedule)) return false;
 
-  const date = Utilities.formatDate(tomorrow, "JST", "M/d");
-  const text = `【変更】明日（${date}）の${schedule.storeName}への勤務はなくなりました。`;
-  return getLineClient().pushOrLogError(schedule.userId, [textMessage(text)], "resendChangedShifts", { workDate: toJstSlashDate(tomorrow) });
+  const text = `【変更】${target.dayWord}（${Utilities.formatDate(date, "JST", "M/d")}）の${schedule.storeName}への勤務はなくなりました。`;
+  return getLineClient().pushOrLogError(schedule.userId, [textMessage(text)], "resendChangedShifts", { workDate: toJstSlashDate(date) });
 }
 
 /** 通知してよい人か（LINEユーザーIDがあり、店舗のアラートがOFFでない） */
@@ -166,6 +206,39 @@ function canNotify_(schedule) {
   if (!schedule.userId || schedule.userId === UNREGISTERED_USER_ID) return false;
   const store = getRepositories().stores.findByStoreName(schedule.storeName);
   return !(store && store.isAlertOff);
+}
+
+/** 勤務の終了時刻を過ぎているか（終了時刻が読めなければ過ぎていないとみなす） */
+function hasShiftEnded_(schedule, workDate, now) {
+  return minutesUntil_(workDate, toJstHourMinute(schedule.endTime), now) < 0;
+}
+
+// --- 実績報告のお願いのトリガー（今日の分） ---
+
+/**
+ * 実績報告のお願い（sendAchieveRemind）のトリガーがある終了時刻
+ * 13:00 の createTriggerAchieveRemind がまだなら null（そのときの勤務管理から作られるので、ここでは作らない）
+ * トリガーの時刻は API で調べられないため、全部署の今日の勤務の終了時刻を「トリガーがある時刻」とみなす
+ * （13:00 に作られた分と、この処理で作った分が含まれる）。全部署を読めなかったときも、重複を避けるため null
+ * @return {Set<string>|null} "H:mm"
+ */
+function achieveRemindTimesWithTrigger_(departmentCode) {
+  if (getAchieveRemindTriggersDate_() !== toJstSlashDate(new Date())) return null;
+
+  const { times, errors } = collectTodayScheduleTimes_(schedule => schedule.endTime);
+  useDepartment(departmentCode); // 全部署を読むために切り替えたので戻す
+  return errors.length === 0 ? new Set(times) : null;
+}
+
+/** 送り直した勤務のうち、終了時刻のトリガーがまだないものを作る（終了時刻を過ぎたものは作らない） */
+function createMissingAchieveRemindTriggers_(schedules, remindTimes, workDate, now) {
+  const newTimes = [...new Set(schedules
+    .map(x => toJstHourMinute(x.endTime))
+    .filter(time => time && !remindTimes.has(time) && minutesUntil_(workDate, time, now) > 0))];
+  if (newTimes.length === 0) return;
+
+  createTriggersBefore_(sendAchieveRemind.name, newTimes, [0]);
+  newTimes.forEach(time => remindTimes.add(time));
 }
 
 /**
